@@ -18,7 +18,7 @@ class ConfiguratorGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Flamingo Configurator GUI")
-        self.geometry("1000x600")
+        self.state('zoomed')  # Fullscreen on Windows
 
         self.config_files = []
         self.current_config_path = None
@@ -64,15 +64,35 @@ class ConfiguratorGUI(tk.Tk):
         middle.add(left_frame, weight=1)
         middle.add(right_frame, weight=1)
 
-        # Node info text (read-only)
-        self.node_text = tk.Text(left_frame, wrap=tk.NONE)
+        # Left panel: split into info (top) and preferences (bottom)
+        # Top: Node info text (read-only)
+        info_frame = ttk.Labelframe(left_frame, text="Info")
+        info_frame.pack(fill=tk.BOTH, expand=False, padx=4, pady=4)
+        self.node_text = tk.Text(info_frame, wrap=tk.NONE, height=15)
         self.node_text.pack(fill=tk.BOTH, expand=True)
         self.node_text.config(state=tk.DISABLED)
+
+        # Bottom: Preferences editor (structured rows)
+        prefs_frame = ttk.Labelframe(left_frame, text="Preferences")
+        prefs_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        
+        self.prefs_canvas = tk.Canvas(prefs_frame, bg='white')
+        prefs_scrollbar = ttk.Scrollbar(prefs_frame, orient=tk.VERTICAL, command=self.prefs_canvas.yview)
+        self.prefs_frame = ttk.Frame(self.prefs_canvas)
+        self.prefs_frame.bind("<Configure>", lambda e: self.prefs_canvas.configure(scrollregion=self.prefs_canvas.bbox("all")))
+        self.prefs_canvas.create_window((0, 0), window=self.prefs_frame, anchor="nw")
+        self.prefs_canvas.configure(yscrollcommand=prefs_scrollbar.set)
+        self.prefs_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        prefs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Track original and current prefs
+        self.original_prefs = {}
+        self.prefs_rows = {}
 
         node_btns = ttk.Frame(left_frame)
         node_btns.pack(fill=tk.X)
         ttk.Button(node_btns, text="Refresh Node Info", command=self.refresh_node_info).pack(side=tk.LEFT, padx=4, pady=4)
-        ttk.Button(node_btns, text="Extract Keys", command=self.extract_keys).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(node_btns, text="Store Private Key", command=self.extract_keys).pack(side=tk.LEFT, padx=4, pady=4)
 
         # Config editor: structured rows with checkbox, key, value, asterisk
         # Container for canvas and buttons
@@ -208,24 +228,40 @@ class ConfiguratorGUI(tk.Tk):
             self.shortname_var.set('')
 
     def render_config_editor(self):
-        """Render config rows from original_config"""
+        """Render config rows from original_config, grouped by section"""
         # Clear existing rows
         for widget in self.config_frame.winfo_children():
             widget.destroy()
         self.config_rows = {}
 
-        # Add header row
-        header = ttk.Frame(self.config_frame)
-        header.pack(fill=tk.X, padx=4, pady=2)
-        ttk.Label(header, text="Send", width=6).pack(side=tk.LEFT, padx=2)
-        ttk.Label(header, text="Key", width=30).pack(side=tk.LEFT, padx=2)
-        ttk.Label(header, text="Value", width=40).pack(side=tk.LEFT, padx=2)
-
-        # Render each config item as a row
-        for key, orig_value in sorted(self.original_config.items()):
+        # Group by section (prefix before first dot)
+        sections = {}
+        for key, orig_value in self.original_config.items():
             if key == '__channels__':
-                continue  # skip channels for now
-            self.add_config_row(key, orig_value)
+                continue
+            if '.' in key:
+                section = key.split('.')[0]
+            else:
+                section = '__other__'
+            if section not in sections:
+                sections[section] = []
+            sections[section].append((key, orig_value))
+
+        # Render each section with header and rows
+        for section_name in sorted(sections.keys()):
+            if section_name == '__other__':
+                # Render unsectioned items at the top
+                for key, orig_value in sorted(sections[section_name]):
+                    self.add_config_row(key, orig_value)
+            else:
+                # Section header
+                header = ttk.Frame(self.config_frame)
+                header.pack(fill=tk.X, padx=4, pady=(8, 2))
+                ttk.Label(header, text=section_name.upper(), font=('TkDefaultFont', 10, 'bold')).pack(anchor='w')
+                
+                # Render items in this section
+                for key, orig_value in sorted(sections[section_name]):
+                    self.add_config_row(key, orig_value)
 
     def add_config_row(self, key: str, orig_value):
         """Add a single row to the config editor"""
@@ -279,6 +315,85 @@ class ConfiguratorGUI(tk.Tk):
         for key, (check_var, _, _) in self.config_rows.items():
             check_var.set(False)
 
+    def render_prefs_editor(self):
+        """Render preferences rows from original_prefs, grouped by section"""
+        for widget in self.prefs_frame.winfo_children():
+            widget.destroy()
+        self.prefs_rows = {}
+
+        # Group by section
+        sections = {}
+        for key, val in self.original_prefs.items():
+            if isinstance(val, dict):
+                sections[key] = val
+            else:
+                if '__other__' not in sections:
+                    sections['__other__'] = {}
+                sections[key] = val
+
+        # Render each section with header and rows
+        for section_name in sorted(sections.keys()):
+            if section_name == '__other__':
+                continue
+            section_data = sections[section_name]
+            
+            # Section header
+            header = ttk.Frame(self.prefs_frame)
+            header.pack(fill=tk.X, padx=4, pady=(8, 2))
+            ttk.Label(header, text=section_name.upper(), font=('TkDefaultFont', 10, 'bold')).pack(anchor='w')
+            
+            # Render items in this section
+            if isinstance(section_data, dict):
+                for subkey, subval in sorted(section_data.items()):
+                    full_key = f"{section_name}.{subkey}"
+                    self.add_pref_row(full_key, subval)
+
+    def add_pref_row(self, key: str, orig_value):
+        """Add a single preference row (no checkbox)"""
+        row = ttk.Frame(self.prefs_frame)
+        row.pack(fill=tk.X, padx=20, pady=2)
+
+        # Key label (extract just the subkey part)
+        subkey = key.split('.')[-1] if '.' in key else key
+        key_label = tk.Label(row, text=subkey, width=30, anchor='w', justify=tk.LEFT)
+        key_label.pack(side=tk.LEFT, padx=2)
+
+        # Value entry
+        value_var = tk.StringVar(value=str(orig_value))
+        entry = ttk.Entry(row, textvariable=value_var, width=50)
+        entry.pack(side=tk.LEFT, padx=2)
+
+        # Asterisk label
+        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'))
+        asterisk_label.pack(side=tk.LEFT, padx=2)
+
+        # Bind value changes
+        def on_value_change(*args, k=key, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var):
+            current = vv.get()
+            if str(ov) != current:
+                al.config(text="*", foreground='red')
+                kl.config(font=('TkDefaultFont', 10, 'bold'))
+            else:
+                al.config(text=" ")
+                kl.config(font=('TkDefaultFont', 10))
+
+        try:
+            value_var.trace_add('write', on_value_change)
+        except Exception:
+            value_var.trace('w', on_value_change)
+
+        self.prefs_rows[key] = (value_var, asterisk_label)
+
+    def format_info_display(self, info_dict):
+        """Format info dict as human-readable text"""
+        lines = []
+        for key, val in sorted(info_dict.items()):
+            if isinstance(val, dict):
+                lines.append(f"{key}: {json.dumps(val)}")
+            else:
+                lines.append(f"{key}: {val}")
+        return '\n'.join(lines)
+
     def refresh_node_info(self):
         def work():
             out = runCmd("meshtastic --info", echoOnly=self.test_var.get(), silent=True)
@@ -304,32 +419,84 @@ class ConfiguratorGUI(tk.Tk):
             except Exception:
                 self.after(0, lambda: self.last_used_var.set("last config used: None"))
 
-            # Filter output: strip first 2 lines, parse the "Nodes in mesh:" block,
-            # keep only the first node inside it, and preserve the rest of the output.
+            # Split output: extract info section (before "Preferences:") and preferences section
             lines = out.splitlines()
             if len(lines) > 2:
                 body = lines[2:]
             else:
                 body = lines[:]
-
+            
+            # Find where Preferences: starts
+            prefs_start_idx = None
+            for idx, l in enumerate(body):
+                if l.strip().startswith('Preferences:'):
+                    prefs_start_idx = idx
+                    break
+            # Extract preferences JSON block by finding matching braces
+            if prefs_start_idx is not None:
+                info_body = body[:prefs_start_idx]
+                # Extract just the Preferences section by finding matching braces
+                prefs_start_line = body[prefs_start_idx]
+                # Strip "Preferences: " prefix
+                if prefs_start_line.startswith('Preferences:'):
+                    prefs_start_line = prefs_start_line[len('Preferences:'):].lstrip()
+                
+                # Find the closing brace of the Preferences JSON object
+                brace_count = 0
+                json_lines = []
+                started = False
+                for i in range(prefs_start_idx, len(body)):
+                    line = body[i]
+                    
+                    if not started:
+                        # Process the first line (may have "Preferences: {")
+                        json_lines.append(prefs_start_line)
+                        brace_count += prefs_start_line.count('{') - prefs_start_line.count('}')
+                        started = True
+                        if brace_count == 0:
+                            break
+                        continue
+                    
+                    # For subsequent lines, check if next section starts
+                    if line.strip().startswith('Module preferences:') or line.strip().startswith('Channels:'):
+                        break
+                    
+                    json_lines.append(line)
+                    brace_count += line.count('{') - line.count('}')
+                    if brace_count == 0:
+                        break
+                
+                prefs_text = '\n'.join(json_lines)
+                try:
+                    parsed = json.loads(prefs_text)
+                    if isinstance(parsed, dict):
+                        self.original_prefs = parsed
+                    else:
+                        self.original_prefs = {}
+                except Exception:
+                    self.original_prefs = {}
+            else:
+                info_body = body
+                self.original_prefs = {}
+            # Now process info_body: filter "Nodes in mesh:" to show only first node
             # Find the start of the Nodes in mesh section
             start_idx = None
-            for idx, l in enumerate(body):
+            for idx, l in enumerate(info_body):
                 if 'Nodes in mesh:' in l:
                     start_idx = idx
                     break
 
             if start_idx is None:
-                display_text = '\n'.join(body)
+                display_text = '\n'.join(info_body)
             else:
                 # Find the end of the Nodes in mesh block by scanning braces
                 i = start_idx
-                n = len(body)
+                n = len(info_body)
                 started = False
                 brace_depth = 0
                 block_lines = []
                 while i < n:
-                    l = body[i]
+                    l = info_body[i]
                     if not started:
                         # include the header line
                         block_lines.append(l)
@@ -374,14 +541,22 @@ class ConfiguratorGUI(tk.Tk):
                     new_block_lines = block_lines
 
                 # Assemble display: before block, new block, after block
-                before = body[:start_idx]
-                after = body[block_end + 1:]
+                before = info_body[:start_idx]
+                after = info_body[block_end + 1:]
                 display_lines = before + new_block_lines + after
                 display_text = '\n'.join(display_lines)
-            self.node_text.config(state=tk.NORMAL)
-            self.node_text.delete('1.0', tk.END)
-            self.node_text.insert(tk.END, display_text)
-            self.node_text.config(state=tk.DISABLED)
+            
+            # Update info section in main thread
+            self.after(0, lambda: (
+                self.node_text.config(state=tk.NORMAL),
+                self.node_text.delete('1.0', tk.END),
+                self.node_text.insert(tk.END, display_text),
+                self.node_text.config(state=tk.DISABLED)
+            ))
+            
+            # Update preferences editor in main thread
+            self.after(0, self.render_prefs_editor)
+        
         threading.Thread(target=work, daemon=True).start()
 
     def revert_changes(self):
