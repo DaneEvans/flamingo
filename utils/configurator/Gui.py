@@ -1,6 +1,7 @@
 import os
 import threading
 import yaml
+import json
 import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -22,6 +23,8 @@ class ConfiguratorGUI(tk.Tk):
         self.config_files = []
         self.current_config_path = None
         self.loaded_config_text = ""
+        self.original_config = {}  # {key: value} from file
+        self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label)}
 
         # Top frame for names and dropdown
         top = ttk.Frame(self)
@@ -71,14 +74,27 @@ class ConfiguratorGUI(tk.Tk):
         ttk.Button(node_btns, text="Refresh Node Info", command=self.refresh_node_info).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(node_btns, text="Extract Keys", command=self.extract_keys).pack(side=tk.LEFT, padx=4, pady=4)
 
-        # Config editor
-        self.config_text = tk.Text(right_frame, wrap=tk.NONE)
-        self.config_text.pack(fill=tk.BOTH, expand=True)
+        # Config editor: structured rows with checkbox, key, value, asterisk
+        # Container for canvas and buttons
+        config_container = ttk.Frame(right_frame)
+        config_container.pack(fill=tk.BOTH, expand=True)
+        
+        self.config_canvas = tk.Canvas(config_container, bg='white')
+        scrollbar = ttk.Scrollbar(config_container, orient=tk.VERTICAL, command=self.config_canvas.yview)
+        self.config_frame = ttk.Frame(self.config_canvas)
+        self.config_frame.bind("<Configure>", lambda e: self.config_canvas.configure(scrollregion=self.config_canvas.bbox("all")))
+        self.config_canvas.create_window((0, 0), window=self.config_frame, anchor="nw")
+        self.config_canvas.configure(yscrollcommand=scrollbar.set)
+        self.config_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Buttons at bottom (always visible)
         cfg_btns = ttk.Frame(right_frame)
-        cfg_btns.pack(fill=tk.X)
+        cfg_btns.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Button(cfg_btns, text="Revert changes", command=self.revert_changes).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Save to file...", command=self.save_config_to_file).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(cfg_btns, text="Select All", command=self.select_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(cfg_btns, text="Deselect All", command=self.deselect_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
 
         # Bottom controls: toggles and actions
         bottom = ttk.Frame(self)
@@ -156,8 +172,24 @@ class ConfiguratorGUI(tk.Tk):
             return
         self.current_config_path = path
         self.loaded_config_text = txt
-        self.config_text.delete('1.0', tk.END)
-        self.config_text.insert(tk.END, txt)
+
+        # Parse YAML and populate structured editor
+        try:
+            data = yaml.safe_load(txt) or {}
+            self.original_config = {}
+            settings = data.get('settings', {})
+            if settings:
+                for k, v in settings.items():
+                    self.original_config[k] = v
+            # Also include channels if present
+            channels = data.get('channels', [])
+            if channels:
+                self.original_config['__channels__'] = channels
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to parse YAML: {e}")
+            self.original_config = {}
+
+        self.render_config_editor()
 
         # try to parse and fill long/short
         try:
@@ -174,6 +206,78 @@ class ConfiguratorGUI(tk.Tk):
         except Exception:
             self.longname_var.set('')
             self.shortname_var.set('')
+
+    def render_config_editor(self):
+        """Render config rows from original_config"""
+        # Clear existing rows
+        for widget in self.config_frame.winfo_children():
+            widget.destroy()
+        self.config_rows = {}
+
+        # Add header row
+        header = ttk.Frame(self.config_frame)
+        header.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Label(header, text="Send", width=6).pack(side=tk.LEFT, padx=2)
+        ttk.Label(header, text="Key", width=30).pack(side=tk.LEFT, padx=2)
+        ttk.Label(header, text="Value", width=40).pack(side=tk.LEFT, padx=2)
+
+        # Render each config item as a row
+        for key, orig_value in sorted(self.original_config.items()):
+            if key == '__channels__':
+                continue  # skip channels for now
+            self.add_config_row(key, orig_value)
+
+    def add_config_row(self, key: str, orig_value):
+        """Add a single row to the config editor"""
+        row = ttk.Frame(self.config_frame)
+        row.pack(fill=tk.X, padx=4, pady=2)
+
+        # Checkbox for "send this setting"
+        check_var = tk.BooleanVar(value=True)
+        check = ttk.Checkbutton(row, variable=check_var, width=6)
+        check.pack(side=tk.LEFT, padx=2)
+
+        # Key label
+        key_label = tk.Label(row, text=key, width=30, anchor='w', justify=tk.LEFT)
+        key_label.pack(side=tk.LEFT, padx=2)
+
+        # Value entry
+        value_var = tk.StringVar(value=str(orig_value))
+        entry = ttk.Entry(row, textvariable=value_var, width=40)
+        entry.pack(side=tk.LEFT, padx=2)
+
+        # Asterisk label (shows if changed) - fixed width to prevent offset
+        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'))
+        asterisk_label.pack(side=tk.LEFT, padx=2)
+
+        # Bind value changes to update asterisk and bold formatting
+        def on_value_change(*args, k=key, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var):
+            current = vv.get()
+            if str(ov) != current:
+                al.config(text="*", foreground='red')
+                kl.config(font=('TkDefaultFont', 10, 'bold'))
+            else:
+                al.config(text=" ")
+                kl.config(font=('TkDefaultFont', 10))
+
+        # use trace_add for modern tkinter
+        try:
+            value_var.trace_add('write', on_value_change)
+        except Exception:
+            # fallback
+            value_var.trace('w', on_value_change)
+
+        self.config_rows[key] = (check_var, value_var, asterisk_label)
+
+    def select_all_configs(self):
+        """Check all config checkboxes"""
+        for key, (check_var, _, _) in self.config_rows.items():
+            check_var.set(True)
+
+    def deselect_all_configs(self):
+        """Uncheck all config checkboxes"""
+        for key, (check_var, _, _) in self.config_rows.items():
+            check_var.set(False)
 
     def refresh_node_info(self):
         def work():
@@ -200,19 +304,116 @@ class ConfiguratorGUI(tk.Tk):
             except Exception:
                 self.after(0, lambda: self.last_used_var.set("last config used: None"))
 
+            # Filter output: strip first 2 lines, parse the "Nodes in mesh:" block,
+            # keep only the first node inside it, and preserve the rest of the output.
+            lines = out.splitlines()
+            if len(lines) > 2:
+                body = lines[2:]
+            else:
+                body = lines[:]
+
+            # Find the start of the Nodes in mesh section
+            start_idx = None
+            for idx, l in enumerate(body):
+                if 'Nodes in mesh:' in l:
+                    start_idx = idx
+                    break
+
+            if start_idx is None:
+                display_text = '\n'.join(body)
+            else:
+                # Find the end of the Nodes in mesh block by scanning braces
+                i = start_idx
+                n = len(body)
+                started = False
+                brace_depth = 0
+                block_lines = []
+                while i < n:
+                    l = body[i]
+                    if not started:
+                        # include the header line
+                        block_lines.append(l)
+                        if '{' in l:
+                            started = True
+                            brace_depth += l.count('{') - l.count('}')
+                        i += 1
+                        continue
+                    else:
+                        block_lines.append(l)
+                        brace_depth += l.count('{') - l.count('}')
+                        i += 1
+                        if started and brace_depth == 0:
+                            break
+
+                block_end = i - 1
+
+                # Parse the block_lines as YAML to extract nodes
+                block_text = '\n'.join(block_lines)
+                try:
+                    parsed = yaml.safe_load(block_text)
+                except Exception:
+                    parsed = None
+
+                nodes_dict = None
+                if isinstance(parsed, dict):
+                    # parsed may be { 'Nodes in mesh': { ... } } or directly the mapping
+                    if 'Nodes in mesh' in parsed and isinstance(parsed['Nodes in mesh'], dict):
+                        nodes_dict = parsed['Nodes in mesh']
+                    else:
+                        # maybe parsed is the dict itself
+                        nodes_dict = parsed
+
+                # Build new block with only the first node if possible
+                if isinstance(nodes_dict, dict) and len(nodes_dict) > 0:
+                    first_key = next(iter(nodes_dict))
+                    first_node = {first_key: nodes_dict[first_key]}
+                    new_block_yaml = yaml.dump({'Nodes in mesh': first_node}, default_flow_style=False)
+                    new_block_lines = new_block_yaml.splitlines()
+                else:
+                    # fallback: keep original block_lines
+                    new_block_lines = block_lines
+
+                # Assemble display: before block, new block, after block
+                before = body[:start_idx]
+                after = body[block_end + 1:]
+                display_lines = before + new_block_lines + after
+                display_text = '\n'.join(display_lines)
             self.node_text.config(state=tk.NORMAL)
             self.node_text.delete('1.0', tk.END)
-            self.node_text.insert(tk.END, out)
+            self.node_text.insert(tk.END, display_text)
             self.node_text.config(state=tk.DISABLED)
         threading.Thread(target=work, daemon=True).start()
 
     def revert_changes(self):
-        # restore original loaded text
-        self.config_text.delete('1.0', tk.END)
-        self.config_text.insert(tk.END, self.loaded_config_text)
+        """Revert all changes to original values"""
+        for key, (_, value_var, _) in self.config_rows.items():
+            orig_val = self.original_config.get(key, '')
+            value_var.set(str(orig_val))
 
     def save_config_to_file(self):
-        txt = self.config_text.get('1.0', tk.END)
+        """Save current config to YAML file"""
+        # Build YAML from current rows
+        config_data = {'settings': {}}
+        for key, (_, value_var, _) in self.config_rows.items():
+            val_str = value_var.get().strip()
+            # Try to parse as JSON, int, bool, or keep as string
+            try:
+                if val_str.lower() in ('true', 'false'):
+                    config_data['settings'][key] = val_str.lower() == 'true'
+                elif val_str.isdigit() or (val_str.startswith('-') and val_str[1:].isdigit()):
+                    config_data['settings'][key] = int(val_str)
+                elif val_str.startswith('{') or val_str.startswith('['):
+                    config_data['settings'][key] = json.loads(val_str)
+                else:
+                    config_data['settings'][key] = val_str
+            except Exception:
+                config_data['settings'][key] = val_str
+
+        # Preserve channels if they exist
+        if '__channels__' in self.original_config:
+            config_data['channels'] = self.original_config['__channels__']
+
+        txt = yaml.dump(config_data, default_flow_style=False)
         path = filedialog.asksaveasfilename(defaultextension='.yml', initialdir=CONFIG_DIR)
         if not path:
             return
@@ -239,16 +440,25 @@ class ConfiguratorGUI(tk.Tk):
         threading.Thread(target=self.write_to_node, daemon=True).start()
 
     def write_to_node(self):
-        # Read YAML from editor
-        txt = self.config_text.get('1.0', tk.END)
-        try:
-            yml = yaml.safe_load(txt) or {}
-        except Exception as e:
-            messagebox.showerror("Error", f"Invalid YAML: {e}")
-            return
+        # Build config from checked rows only
+        config_opts = {}
+        for key, (check_var, value_var, _) in self.config_rows.items():
+            if check_var.get():  # only include checked items
+                val_str = value_var.get().strip()
+                # Try to parse as JSON, int, bool, or keep as string
+                try:
+                    if val_str.lower() in ('true', 'false'):
+                        config_opts[key] = val_str.lower() == 'true'
+                    elif val_str.isdigit() or (val_str.startswith('-') and val_str[1:].isdigit()):
+                        config_opts[key] = int(val_str)
+                    elif val_str.startswith('{') or val_str.startswith('['):
+                        config_opts[key] = json.loads(val_str)
+                    else:
+                        config_opts[key] = val_str
+                except Exception:
+                    config_opts[key] = val_str
 
-        config_opts = yml.get('settings', {})
-        channels = yml.get('channels', [])
+        channels = self.original_config.get('__channels__', [])
 
         # apply top name overrides
         ln = self.longname_var.get().strip()
