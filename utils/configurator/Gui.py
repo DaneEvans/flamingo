@@ -394,6 +394,81 @@ class ConfiguratorGUI(tk.Tk):
                 lines.append(f"{key}: {val}")
         return '\n'.join(lines)
 
+    def format_json_section(self, line_text, blacklist=None):
+        """Format a line containing JSON (e.g., 'My info: { ... }') into nicely formatted text
+        
+        Args:
+            line_text: The line to format (e.g., "My info: { ... }")
+            blacklist: Set or list of keys to exclude from output
+        """
+        if blacklist is None:
+            blacklist = set()
+        else:
+            blacklist = set(blacklist)
+        
+        # e.g., "My info: { ... }" -> extract prefix and JSON part
+        if ':' not in line_text:
+            return line_text
+        parts = line_text.split(':', 1)
+        prefix = parts[0].strip()
+        json_part = parts[1].strip()
+        
+        try:
+            obj = json.loads(json_part)
+            if isinstance(obj, dict):
+                formatted_lines = [f"{prefix}:"]
+                for k, v in sorted(obj.items()):
+                    # Check if key matches blacklist (exact or with has* pattern)
+                    if k in blacklist:
+                        continue
+                    if k.startswith('has') and 'has*' in blacklist:
+                        continue
+                    formatted_lines.append(f"  {k}: {v}")
+                return '\n'.join(formatted_lines)
+        except Exception:
+            pass
+        return line_text
+
+    def format_nodes_section(self, block_text, nodes_dict):
+        """Format nodes display: drop node ID keys, blacklist certain fields
+        
+        Returns:
+            Tuple of (formatted_text, user_id) where user_id is the node's user.id
+        """
+        BLACKLIST = {'isFavorite', 'num', 'user.longName', 'user.shortName'}
+        
+        # Extract just the first node's data (not wrapped in its ID key)
+        user_id = None
+        if isinstance(nodes_dict, dict) and len(nodes_dict) > 0:
+            first_key = next(iter(nodes_dict))
+            first_node = nodes_dict[first_key]
+            # Extract user.id if available
+            if isinstance(first_node.get('user'), dict):
+                user_id = first_node['user'].get('id')
+        else:
+            return block_text, None
+        
+        # Recursively filter blacklisted keys
+        def filter_node(obj, prefix=''):
+            if isinstance(obj, dict):
+                filtered = {}
+                for k, v in obj.items():
+                    full_key = f"{prefix}.{k}" if prefix else k
+                    if full_key not in BLACKLIST:
+                        filtered[k] = filter_node(v, full_key)
+                return filtered
+            return obj
+        
+        filtered_node = filter_node(first_node)
+        
+        # Dump as YAML
+        lines = ['OurNode:']
+        yaml_str = yaml.dump(filtered_node, default_flow_style=False)
+        for line in yaml_str.splitlines():
+            lines.append('  ' + line)  # indent node content
+        
+        return '\n'.join(lines), user_id
+
     def refresh_node_info(self):
         def work():
             out = runCmd("meshtastic --info", echoOnly=self.test_var.get(), silent=True)
@@ -487,7 +562,19 @@ class ConfiguratorGUI(tk.Tk):
                     break
 
             if start_idx is None:
-                display_text = '\n'.join(info_body)
+                # Format My info and Metadata sections, no Nodes section
+                formatted_body = []
+                for line in info_body:
+                    stripped = line.strip()
+                    if stripped.startswith('My info:'):
+                        # Hide: deviceId, rebootCount
+                        formatted_body.extend(self.format_json_section(line, blacklist={'deviceId', 'rebootCount'}).splitlines())
+                    elif stripped.startswith('Metadata:'):
+                        # Hide: canShutdown, excludedModules, has*
+                        formatted_body.extend(self.format_json_section(line, blacklist={'canShutdown', 'excludedModules', 'has*'}).splitlines())
+                    else:
+                        formatted_body.append(line)
+                display_text = '\n'.join(formatted_body)
             else:
                 # Find the end of the Nodes in mesh block by scanning braces
                 i = start_idx
@@ -530,12 +617,11 @@ class ConfiguratorGUI(tk.Tk):
                         # maybe parsed is the dict itself
                         nodes_dict = parsed
 
-                # Build new block with only the first node if possible
+                # Format the node block with blacklist filtering
+                user_id = None
                 if isinstance(nodes_dict, dict) and len(nodes_dict) > 0:
-                    first_key = next(iter(nodes_dict))
-                    first_node = {first_key: nodes_dict[first_key]}
-                    new_block_yaml = yaml.dump({'Nodes in mesh': first_node}, default_flow_style=False)
-                    new_block_lines = new_block_yaml.splitlines()
+                    new_block_text, user_id = self.format_nodes_section(block_text, nodes_dict)
+                    new_block_lines = new_block_text.splitlines()
                 else:
                     # fallback: keep original block_lines
                     new_block_lines = block_lines
@@ -543,8 +629,26 @@ class ConfiguratorGUI(tk.Tk):
                 # Assemble display: before block, new block, after block
                 before = info_body[:start_idx]
                 after = info_body[block_end + 1:]
-                display_lines = before + new_block_lines + after
+                
+                # Format My info and Metadata sections, and append user_id to Owner line
+                formatted_before = []
+                for line in before:
+                    stripped = line.strip()
+                    if stripped.startswith('Owner:') and user_id:
+                        # Append user_id to Owner line
+                        formatted_before.append(f"{line} -- {user_id}")
+                    elif stripped.startswith('My info:'):
+                        # Hide: deviceId, rebootCount
+                        formatted_before.extend(self.format_json_section(line, blacklist={'deviceId', 'rebootCount'}).splitlines())
+                    elif stripped.startswith('Metadata:'):
+                        # Hide: canShutdown, excludedModules, has*
+                        formatted_before.extend(self.format_json_section(line, blacklist={'canShutdown', 'excludedModules', 'has*'}).splitlines())
+                    else:
+                        formatted_before.append(line)
+                
+                display_lines = formatted_before + new_block_lines + after
                 display_text = '\n'.join(display_lines)
+
             
             # Update info section in main thread
             self.after(0, lambda: (
