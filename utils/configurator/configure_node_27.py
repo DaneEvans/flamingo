@@ -48,7 +48,7 @@ import shlex
 
 version = "2.0"
 firmware_versions = (2.7, 3.0) # Low, high firmware limits (Major.Minor) for this version of the configurator
-sleep_time = 20
+sleep_time = 10
 range_test_extra_sleep = 20
 infodir = "infofiles"
 configdir = "configfiles"

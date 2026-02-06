@@ -1598,11 +1598,6 @@ class ConfiguratorGUI(tk.Tk):
 
         # After writes, refresh node info and attempt to extract keys
         self.refresh_node_info()
-        if not self.test_var.get():
-            info_out2 = runCmd(infocmd, echoOnly=self.test_var.get(), silent=True)
-            keys = extractKeysFromInfo(info_out2, "meshtastic")
-            if keys:
-                writeKeysToFile(keys['nodeId'], keys['private_key'], keys['public_key'], self.current_config_path or '')
 
         if had_error:
             messagebox.showerror("Write failed", "One or more commands failed. Check the console output for details.")
