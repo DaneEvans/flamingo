@@ -2,6 +2,7 @@ import os
 import threading
 import yaml
 import json
+import ast
 import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -26,6 +27,7 @@ class ConfiguratorGUI(tk.Tk):
         self.original_config = {}  # {key: value} from file
         self.original_config_channels = []  # Channels from config file
         self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label)}
+        self.channel_rows = {}  # {index: {field: (checkbox_var, value_var, asterisk_label)}}
 
         # Top frame for names and dropdown
         top = ttk.Frame(self)
@@ -137,6 +139,8 @@ class ConfiguratorGUI(tk.Tk):
         cfg_btns.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Button(cfg_btns, text="Revert changes", command=self.revert_changes).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Save to file...", command=self.save_config_to_file).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(cfg_btns, text="Add Config Key", command=self.add_config_key).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(cfg_btns, text="Add Channel", command=self.add_channel).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Select All", command=self.select_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Deselect All", command=self.deselect_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
 
@@ -257,6 +261,7 @@ class ConfiguratorGUI(tk.Tk):
         for widget in self.config_frame.winfo_children():
             widget.destroy()
         self.config_rows = {}
+        self.channel_rows = {}
 
         # Group by section (prefix before first dot)
         sections = {}
@@ -301,19 +306,19 @@ class ConfiguratorGUI(tk.Tk):
             for channel in self.original_config_channels:
                 if isinstance(channel, dict):
                     idx = channel.get('index', '?')
-                    name = channel.get('name', 'N/A')
-                    psk = channel.get('psk', 'N/A')
                     
                     # Channel header
                     ch_header = ttk.Frame(self.config_frame)
                     ch_header.pack(fill=tk.X, padx=20, pady=(4, 2))
-                    ttk.Label(ch_header, text=f"Channel {idx}: {name}", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
+                    ttk.Label(ch_header, text=f"Channel {idx}", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
                     
-                    # Channel details
-                    for key, val in sorted(channel.items()):
-                        row = ttk.Frame(self.config_frame)
-                        row.pack(fill=tk.X, padx=40, pady=1)
-                        ttk.Label(row, text=f"{key}: {val}", font=('TkFixedFont', 8)).pack(anchor='w')
+                    # Channel details as editable rows
+                    if idx not in self.channel_rows:
+                        self.channel_rows[idx] = {}
+                    
+                    for key in ['index', 'name', 'psk']:
+                        val = channel.get(key, '')
+                        self.add_channel_row(idx, key, val)
 
     def add_config_row(self, key: str, orig_value):
         """Add a single row to the config editor"""
@@ -540,15 +545,158 @@ class ConfiguratorGUI(tk.Tk):
             except (ValueError, TypeError):
                 return None
         elif isinstance(device_value, list):
-            # Handle list - try to parse as JSON or comma-separated
+            # Handle list - try to parse as JSON or Python literal
             try:
-                return json.loads(value_str)
+                # Try JSON first
+                parsed_list = json.loads(value_str)
             except (ValueError, json.JSONDecodeError):
-                # Try comma-separated
-                return [v.strip() for v in value_str.split(',')]
+                try:
+                    # Try Python literal evaluation (handles ['item'] format)
+                    parsed_list = ast.literal_eval(value_str)
+                except (ValueError, SyntaxError):
+                    # Fall back to comma-separated
+                    parsed_list = [v.strip() for v in value_str.split(',')]
+            
+            # Strip 'base64:' prefix from list items for comparison (e.g., admin_key)
+            if isinstance(parsed_list, list):
+                normalized_list = []
+                for item in parsed_list:
+                    if isinstance(item, str) and item.startswith('base64:'):
+                        normalized_list.append(item[7:])  # Strip 'base64:' prefix
+                    else:
+                        normalized_list.append(item)
+                return normalized_list
+            return parsed_list
         else:
             # Default: string comparison
             return value_str
+
+    def add_channel_row(self, channel_idx, field_key: str, orig_value):
+        """Add a single editable channel field row"""
+        row = tk.Frame(self.config_frame, bg='white')
+        row.pack(fill=tk.X, padx=40, pady=2)
+
+        # Checkbox
+        check_var = tk.BooleanVar(value=True)
+        check = tk.Checkbutton(row, variable=check_var, width=6, bg='white', activebackground='white')
+        check.pack(side=tk.LEFT, padx=2)
+
+        # Field label
+        key_label = tk.Label(row, text=field_key, width=15, anchor='w', justify=tk.LEFT, bg='white')
+        key_label.pack(side=tk.LEFT, padx=2)
+
+        # Value entry
+        value_var = tk.StringVar(value=str(orig_value))
+        entry = tk.Entry(row, textvariable=value_var, width=40)
+        entry.pack(side=tk.LEFT, padx=2)
+
+        # Asterisk label
+        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'), bg='white')
+        asterisk_label.pack(side=tk.LEFT, padx=2)
+
+        # Bind value changes
+        def on_value_change(*args, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var, rw=row, cidx=channel_idx, fk=field_key):
+            current = vv.get()
+            if str(ov) != current:
+                al.config(text="*", foreground='red')
+                kl.config(font=('TkDefaultFont', 10, 'bold'))
+            else:
+                al.config(text=" ")
+                kl.config(font=('TkDefaultFont', 10))
+            
+            # Check if this channel field differs from device channel
+            self.update_channel_color(cidx, fk, current, rw)
+
+        try:
+            value_var.trace_add('write', on_value_change)
+        except Exception:
+            value_var.trace('w', on_value_change)
+
+        self.channel_rows[channel_idx][field_key] = (check_var, value_var, asterisk_label)
+        
+        # Initial color check
+        self.update_channel_color(channel_idx, field_key, str(orig_value), row)
+
+    def update_channel_color(self, channel_idx, field_key: str, current_value: str, row_widget):
+        """Check if channel field differs from device channel and update row background color"""
+        
+        print(f"\n=== CHANNEL DEBUG: idx={channel_idx}, field={field_key} ===")
+        print(f"Config value: {repr(current_value)}")
+        print(f"self.original_channels type: {type(self.original_channels)}")
+        print(f"self.original_channels: {self.original_channels}")
+        
+        # Find the matching device channel by index
+        device_channel = None
+        if isinstance(self.original_channels, list):
+            for ch in self.original_channels:
+                print(f"  Checking channel: {ch}")
+                if isinstance(ch, dict):
+                    ch_data = ch.get('data', {})
+                    ch_index = ch.get('index', '')
+                    print(f"    Channel index: {repr(ch_index)}, comparing to config index {repr(channel_idx)}")
+                    # Match device channel by its index field
+                    if str(ch_index) == str(channel_idx):
+                        device_channel = ch_data
+                        print(f"    MATCH! Device channel data: {ch_data}")
+                        break
+        
+        print(f"Device channel found: {device_channel is not None}")
+        if device_channel:
+            print(f"Device channel data: {device_channel}")
+        
+        # Map config field names to device field names
+        field_mapping = {
+            'index': 'channelNum',
+            'name': 'name',
+            'psk': 'psk'
+        }
+        
+        device_field = field_mapping.get(field_key, field_key)
+        print(f"Field mapping: '{field_key}' -> '{device_field}'")
+        
+        if device_channel is not None and device_field in device_channel:
+            device_value = device_channel[device_field]
+            print(f"Device field '{device_field}': {repr(device_value)}")
+            
+            # Handle psk with base64 prefix (like admin_key)
+            compare_value = current_value
+            compare_device = device_value
+            
+            if field_key == 'psk':
+                # Strip base64: prefix from config value for comparison
+                if isinstance(compare_value, str) and compare_value.startswith('base64:'):
+                    compare_value = compare_value[7:]
+                    print(f"Stripped config psk to: {repr(compare_value)}")
+            
+            # Compare values
+            matches = str(compare_value) == str(compare_device)
+            print(f"Comparison: {repr(compare_value)} == {repr(compare_device)} => {matches}")
+            
+            if matches:
+                # Same as device - green
+                color = '#90EE90'  # Light green
+                text_color = 'darkgreen'
+            else:
+                # Different from device - yellow
+                color = '#FFFF99'  # Light yellow
+                text_color = 'darkorange'
+        else:
+            # Device channel doesn't exist for this index/field - white
+            print(f"Device field '{device_field}' not found in device channel")
+            color = 'white'
+            text_color = 'black'
+        
+        print(f"Setting color: {color}\n")
+        
+        # Update row background and text colors
+        row_widget.config(bg=color)
+        for child in row_widget.winfo_children():
+            if isinstance(child, tk.Label):
+                child.config(bg=color, fg=text_color)
+            elif isinstance(child, tk.Entry):
+                child.config(bg=color, fg=text_color)
+            elif isinstance(child, tk.Checkbutton):
+                child.config(bg=color, activebackground=color)
 
     def refresh_config_colors(self):
         """Refresh color highlighting for all config rows based on current device preferences"""
@@ -565,6 +713,22 @@ class ConfiguratorGUI(tk.Tk):
                             self.update_config_pref_color(key, current_value, child)
                             break
 
+    def refresh_channel_colors(self):
+        """Refresh color highlighting for all channel rows based on current device channels"""
+        for channel_idx, fields in self.channel_rows.items():
+            for field_key, (_, value_var, _) in fields.items():
+                current_value = value_var.get()
+                # Find the row widget by searching children
+                for child in self.config_frame.winfo_children():
+                    if isinstance(child, tk.Frame):
+                        # Check if this is a channel row by checking label text
+                        for label in child.winfo_children():
+                            if isinstance(label, tk.Label) and label.cget('text') == field_key:
+                                # Check if this belongs to the right channel by checking parent structure
+                                # This is a bit crude but should work for now
+                                self.update_channel_color(channel_idx, field_key, current_value, child)
+                                break
+
     def select_all_configs(self):
         """Check all config checkboxes"""
         for key, (check_var, _, _) in self.config_rows.items():
@@ -574,6 +738,49 @@ class ConfiguratorGUI(tk.Tk):
         """Uncheck all config checkboxes"""
         for key, (check_var, _, _) in self.config_rows.items():
             check_var.set(False)
+
+    def add_config_key(self):
+        """Add a new config key/value pair"""
+        # Prompt for key and value
+        dialog = tk.Toplevel(self)
+        dialog.title("Add Config Key")
+        dialog.geometry("400x150")
+        
+        ttk.Label(dialog, text="Key (e.g., lora.tx_power):").pack(padx=10, pady=5)
+        key_entry = ttk.Entry(dialog, width=50)
+        key_entry.pack(padx=10, pady=5)
+        
+        ttk.Label(dialog, text="Value:").pack(padx=10, pady=5)
+        value_entry = ttk.Entry(dialog, width=50)
+        value_entry.pack(padx=10, pady=5)
+        
+        def on_add():
+            key = key_entry.get().strip()
+            value = value_entry.get().strip()
+            if key:
+                self.original_config[key] = value
+                dialog.destroy()
+                self.render_config_editor()
+            else:
+                messagebox.showwarning("Invalid", "Key cannot be empty")
+        
+        ttk.Button(dialog, text="Add", command=on_add).pack(pady=10)
+
+    def add_channel(self):
+        """Add a new channel"""
+        # Find next available index
+        existing_indices = [int(ch.get('index', 0)) for ch in self.original_config_channels if isinstance(ch, dict)]
+        next_idx = max(existing_indices) + 1 if existing_indices else 0
+        
+        # Create new channel with defaults
+        new_channel = {
+            'index': next_idx,
+            'name': f'Channel{next_idx}',
+            'psk': 'AQ=='
+        }
+        
+        self.original_config_channels.append(new_channel)
+        self.render_config_editor()
 
     def render_prefs_editor(self):
         """Render regular preferences on left, modules and channels on right"""
@@ -688,6 +895,7 @@ class ConfiguratorGUI(tk.Tk):
         
         # Recalculate config row colors now that preferences are updated
         self.refresh_config_colors()
+        self.refresh_channel_colors()
 
     def add_pref_row(self, key: str, orig_value):
         """Add a single preference row (no checkbox)"""
@@ -1153,9 +1361,23 @@ class ConfiguratorGUI(tk.Tk):
             except Exception:
                 config_data['settings'][key] = val_str
 
-        # Preserve channels if they exist
-        if '__channels__' in self.original_config:
-            config_data['channels'] = self.original_config['__channels__']
+        # Build channels from channel rows
+        if self.channel_rows:
+            channels_list = []
+            for idx in sorted(self.channel_rows.keys()):
+                channel_data = {}
+                for field, (_, value_var, _) in self.channel_rows[idx].items():
+                    val_str = value_var.get().strip()
+                    # Try to convert index to int
+                    if field == 'index':
+                        try:
+                            channel_data[field] = int(val_str)
+                        except ValueError:
+                            channel_data[field] = val_str
+                    else:
+                        channel_data[field] = val_str
+                channels_list.append(channel_data)
+            config_data['channels'] = channels_list
 
         txt = yaml.dump(config_data, default_flow_style=False)
         path = filedialog.asksaveasfilename(defaultextension='.yml', initialdir=CONFIG_DIR)
