@@ -28,6 +28,8 @@ class ConfiguratorGUI(tk.Tk):
         self.original_config_channels = []  # Channels from config file
         self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label, row_widget)}
         self.channel_rows = {}  # {index: {field: (checkbox_var, value_var, asterisk_label, row_widget)}}
+        self.original_longname = ""  # Longname loaded from node
+        self.original_shortname = ""  # Shortname loaded from node
 
         # Top frame for names and dropdown
         top = ttk.Frame(self)
@@ -111,7 +113,7 @@ class ConfiguratorGUI(tk.Tk):
         # Track original and current prefs
         self.original_prefs = {}  # Regular preferences (device, position, power, etc.)
         self.original_module_prefs = {}  # Module preferences (mqtt, serial, etc.)
-        self.original_channels = {}  # Channels data
+        self.original_channels = []  # Channels data (list of {index, data})
         self.prefs_rows = {}
         self.module_prefs_rows = {}
 
@@ -163,6 +165,11 @@ class ConfiguratorGUI(tk.Tk):
         # initialise
         self.refresh_config_list()
         self.refresh_node_info()
+
+    def _store_original_names(self, ln: str, sn: str):
+        """Store the original longname and shortname loaded from the node"""
+        self.original_longname = ln
+        self.original_shortname = sn
 
     def refresh_config_list(self):
         self.config_files = []
@@ -1122,8 +1129,8 @@ class ConfiguratorGUI(tk.Tk):
                 if m:
                     ln = m.group(1).strip()
                     sn = m.group(2).strip()
-                    # Use Tk main thread to update vars
-                    self.after(0, lambda ln=ln, sn=sn: (self.longname_var.set(ln), self.shortname_var.set(sn)))
+                    # Use Tk main thread to update vars and store original values
+                    self.after(0, lambda ln=ln, sn=sn: (self.longname_var.set(ln), self.shortname_var.set(sn), self._store_original_names(ln, sn)))
                     break
 
             # Extract nodeId from info and update last-used config label
@@ -1283,9 +1290,9 @@ class ConfiguratorGUI(tk.Tk):
                         except Exception:
                             pass
                 
-                self.original_channels = channels_list if channels_list else {}
+                self.original_channels = channels_list if channels_list else []
             else:
-                self.original_channels = {}
+                self.original_channels = []
             # Now process info_body: filter "Nodes in mesh:" to show only first node
             # Find the start of the Nodes in mesh section
             start_idx = None
@@ -1485,17 +1492,21 @@ class ConfiguratorGUI(tk.Tk):
                     config_opts[key] = val_str
 
             had_error = False
-        channels = self.original_config.get('__channels__', [])
-
-        # apply top name overrides
-        ln = self.longname_var.get().strip()
-        sn = self.shortname_var.get().strip()
-        orig_ln = str(self.original_config.get('user.longname', '')).strip()
-        orig_sn = str(self.original_config.get('user.shortname', '')).strip()
-        if ln and ln != orig_ln:
-            config_opts['user.longname'] = ln
-        if sn and sn != orig_sn:
-            config_opts['user.shortname'] = sn
+        
+        # Build channels from edited channel rows
+        channels = []
+        for idx in sorted(self.channel_rows.keys()):
+            channel_data = {}
+            for field, (_, value_var, _, _) in self.channel_rows[idx].items():
+                val_str = value_var.get().strip()
+                if field == 'index':
+                    try:
+                        channel_data[field] = int(val_str)
+                    except ValueError:
+                        channel_data[field] = val_str
+                else:
+                    channel_data[field] = val_str
+            channels.append(channel_data)
 
         # Build getcmd to read current settings
         getcmd = "meshtastic"
@@ -1513,6 +1524,14 @@ class ConfiguratorGUI(tk.Tk):
         combined_out = "\n".join(info_out.splitlines()[:5]) + "\n" + get_out
         old_settings = doCompareSettings(combined_out, None)
         new_settings = getNewSettings(old_settings, config_opts)
+        
+        # Add owner names only if they changed from the loaded node values
+        ln = self.longname_var.get().strip()
+        sn = self.shortname_var.get().strip()
+        if ln and ln != self.original_longname:
+            new_settings['user.longname'] = ln
+        if sn and sn != self.original_shortname:
+            new_settings['user.shortname'] = sn
 
         # If retain keys requested, attempt to restore previous keys before other writes
         if self.retain_var.get():
@@ -1521,7 +1540,8 @@ class ConfiguratorGUI(tk.Tk):
                 saved = readKeysFromFile(keys_info['nodeId'])
                 if saved:
                     pk = saved.get('private_key')
-                    if pk and self.set_var.get():
+                    current_pk = keys_info.get('private_key')
+                    if pk and self.set_var.get() and pk != current_pk:
                         cmd = f"meshtastic --set security.private_key base64:{pk}"
                         runCmd(cmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
 
