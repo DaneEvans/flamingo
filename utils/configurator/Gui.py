@@ -24,6 +24,7 @@ class ConfiguratorGUI(tk.Tk):
         self.current_config_path = None
         self.loaded_config_text = ""
         self.original_config = {}  # {key: value} from file
+        self.original_config_channels = []  # Channels from config file
         self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label)}
 
         # Top frame for names and dropdown
@@ -72,12 +73,19 @@ class ConfiguratorGUI(tk.Tk):
         self.node_text.pack(fill=tk.BOTH, expand=True)
         self.node_text.config(state=tk.DISABLED)
 
-        # Bottom: Preferences editor (structured rows)
-        prefs_frame = ttk.Labelframe(left_frame, text="Preferences")
-        prefs_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # Bottom: Split preferences into left (regular) and right (modules + channels)
+        prefs_container = ttk.Labelframe(left_frame, text="Preferences & Modules")
+        prefs_container.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         
-        self.prefs_canvas = tk.Canvas(prefs_frame, bg='white')
-        prefs_scrollbar = ttk.Scrollbar(prefs_frame, orient=tk.VERTICAL, command=self.prefs_canvas.yview)
+        prefs_split = ttk.Panedwindow(prefs_container, orient=tk.HORIZONTAL)
+        prefs_split.pack(fill=tk.BOTH, expand=True)
+        
+        # Left column: Regular preferences
+        prefs_left_frame = ttk.Frame(prefs_split)
+        prefs_split.add(prefs_left_frame, weight=1)
+        
+        self.prefs_canvas = tk.Canvas(prefs_left_frame, bg='white')
+        prefs_scrollbar = ttk.Scrollbar(prefs_left_frame, orient=tk.VERTICAL, command=self.prefs_canvas.yview)
         self.prefs_frame = ttk.Frame(self.prefs_canvas)
         self.prefs_frame.bind("<Configure>", lambda e: self.prefs_canvas.configure(scrollregion=self.prefs_canvas.bbox("all")))
         self.prefs_canvas.create_window((0, 0), window=self.prefs_frame, anchor="nw")
@@ -85,9 +93,25 @@ class ConfiguratorGUI(tk.Tk):
         self.prefs_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         prefs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
+        # Right column: Module preferences and channels
+        prefs_right_frame = ttk.Frame(prefs_split)
+        prefs_split.add(prefs_right_frame, weight=1)
+        
+        self.module_canvas = tk.Canvas(prefs_right_frame, bg='white')
+        module_scrollbar = ttk.Scrollbar(prefs_right_frame, orient=tk.VERTICAL, command=self.module_canvas.yview)
+        self.module_frame = ttk.Frame(self.module_canvas)
+        self.module_frame.bind("<Configure>", lambda e: self.module_canvas.configure(scrollregion=self.module_canvas.bbox("all")))
+        self.module_canvas.create_window((0, 0), window=self.module_frame, anchor="nw")
+        self.module_canvas.configure(yscrollcommand=module_scrollbar.set)
+        self.module_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        module_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
         # Track original and current prefs
-        self.original_prefs = {}
+        self.original_prefs = {}  # Regular preferences (device, position, power, etc.)
+        self.original_module_prefs = {}  # Module preferences (mqtt, serial, etc.)
+        self.original_channels = {}  # Channels data
         self.prefs_rows = {}
+        self.module_prefs_rows = {}
 
         node_btns = ttk.Frame(left_frame)
         node_btns.pack(fill=tk.X)
@@ -201,13 +225,13 @@ class ConfiguratorGUI(tk.Tk):
             if settings:
                 for k, v in settings.items():
                     self.original_config[k] = v
-            # Also include channels if present
+            # Extract channels separately
             channels = data.get('channels', [])
-            if channels:
-                self.original_config['__channels__'] = channels
+            self.original_config_channels = channels if channels else []
         except Exception as e:
             messagebox.showerror("Error", f"Failed to parse YAML: {e}")
             self.original_config = {}
+            self.original_config_channels = []
 
         self.render_config_editor()
 
@@ -262,32 +286,60 @@ class ConfiguratorGUI(tk.Tk):
                 # Render items in this section
                 for key, orig_value in sorted(sections[section_name]):
                     self.add_config_row(key, orig_value)
+        
+        # Render config channels and module prefs below config rows
+        self.render_config_channels_and_modules()
+
+    def render_config_channels_and_modules(self):
+        """Render config file channels and module preferences in the config panel"""
+        # Render config channels
+        if self.original_config_channels:
+            header = ttk.Frame(self.config_frame)
+            header.pack(fill=tk.X, padx=4, pady=(12, 2))
+            ttk.Label(header, text="CHANNELS", font=('TkDefaultFont', 10, 'bold')).pack(anchor='w')
+            
+            for channel in self.original_config_channels:
+                if isinstance(channel, dict):
+                    idx = channel.get('index', '?')
+                    name = channel.get('name', 'N/A')
+                    psk = channel.get('psk', 'N/A')
+                    
+                    # Channel header
+                    ch_header = ttk.Frame(self.config_frame)
+                    ch_header.pack(fill=tk.X, padx=20, pady=(4, 2))
+                    ttk.Label(ch_header, text=f"Channel {idx}: {name}", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
+                    
+                    # Channel details
+                    for key, val in sorted(channel.items()):
+                        row = ttk.Frame(self.config_frame)
+                        row.pack(fill=tk.X, padx=40, pady=1)
+                        ttk.Label(row, text=f"{key}: {val}", font=('TkFixedFont', 8)).pack(anchor='w')
 
     def add_config_row(self, key: str, orig_value):
         """Add a single row to the config editor"""
-        row = ttk.Frame(self.config_frame)
+        row = tk.Frame(self.config_frame, bg='white')  # Use tk.Frame to support background color
         row.pack(fill=tk.X, padx=4, pady=2)
 
         # Checkbox for "send this setting"
         check_var = tk.BooleanVar(value=True)
-        check = ttk.Checkbutton(row, variable=check_var, width=6)
+        check = tk.Checkbutton(row, variable=check_var, width=6, bg='white', activebackground='white')
         check.pack(side=tk.LEFT, padx=2)
 
         # Key label
-        key_label = tk.Label(row, text=key, width=30, anchor='w', justify=tk.LEFT)
+        key_label = tk.Label(row, text=key, width=30, anchor='w', justify=tk.LEFT, bg='white')
         key_label.pack(side=tk.LEFT, padx=2)
 
         # Value entry
         value_var = tk.StringVar(value=str(orig_value))
-        entry = ttk.Entry(row, textvariable=value_var, width=40)
+        entry = tk.Entry(row, textvariable=value_var, width=40)
         entry.pack(side=tk.LEFT, padx=2)
 
         # Asterisk label (shows if changed) - fixed width to prevent offset
-        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'))
+        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'), bg='white')
         asterisk_label.pack(side=tk.LEFT, padx=2)
 
-        # Bind value changes to update asterisk and bold formatting
-        def on_value_change(*args, k=key, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var):
+        # Bind value changes to update asterisk, bold formatting, and preference mismatch color
+        def on_value_change(*args, k=key, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var, rw=row):
             current = vv.get()
             if str(ov) != current:
                 al.config(text="*", foreground='red')
@@ -295,6 +347,9 @@ class ConfiguratorGUI(tk.Tk):
             else:
                 al.config(text=" ")
                 kl.config(font=('TkDefaultFont', 10))
+            
+            # Check if this config differs from preferences
+            self.update_config_pref_color(k, current, rw)
 
         # use trace_add for modern tkinter
         try:
@@ -304,6 +359,211 @@ class ConfiguratorGUI(tk.Tk):
             value_var.trace('w', on_value_change)
 
         self.config_rows[key] = (check_var, value_var, asterisk_label)
+        
+        # Initial color check
+        self.update_config_pref_color(key, str(orig_value), row)
+
+    def update_config_pref_color(self, key: str, current_value: str, row_widget):
+        """Check if config value differs from preference and update row background color
+        
+        Green if value matches device preference (or device pref doesn't exist)
+        Yellow if value differs from device preference
+        
+        Handles conversion from config format (snake_case) to device format (camelCase)
+        """
+        # Build all available preferences dict: combine regular prefs and module prefs
+        all_device_prefs = {}
+        all_device_prefs.update(self.original_prefs)
+        all_device_prefs.update(self.original_module_prefs)
+        
+        # Flatten the preferences dict to handle nested keys like device.nodeInfoBroadcastSecs
+        flattened_device = {}
+        for section_key, section_val in all_device_prefs.items():
+            if isinstance(section_val, dict):
+                for sub_key, sub_val in section_val.items():
+                    full_key = f"{section_key}.{sub_key}"
+                    flattened_device[full_key] = sub_val
+            else:
+                # Top-level key (like 'version')
+                flattened_device[section_key] = section_val
+        
+        # Convert config key format (with underscores) to device format (camelCase)
+        # e.g., "bluetooth.fixed_pin" -> "bluetooth.fixedPin"
+        # e.g., "neighbor_info.enabled" -> "neighborInfo.enabled"
+        device_key = self.convert_config_key_to_device(key)
+        
+        # Try the converted key first
+        device_value = flattened_device.get(device_key)
+        if device_value is None:
+            device_value = flattened_device.get(key)
+        
+        # If not found, try alternative mappings for known problematic cases
+        if device_value is None:
+            alt_mappings = self.get_alternate_keys(key)
+            for alt_key in alt_mappings:
+                if alt_key in flattened_device:
+                    device_value = flattened_device[alt_key]
+                    break
+            
+            # If still not found, print debug info
+            if device_value is None:
+                self.debug_config_key_mapping(key)
+        
+        if device_value is not None:
+            # Parse the config value to match the type of device value
+            parsed_config_value = self.parse_config_value(current_value, device_value)
+            
+            # Compare values
+            matches = parsed_config_value == device_value
+            print(f"COMPARE: {key} | parsed={repr(parsed_config_value)} ({type(parsed_config_value).__name__}) == device={repr(device_value)} ({type(device_value).__name__}) => {matches}")
+            
+            if matches:
+                # Same as device - green
+                color = '#90EE90'  # Light green
+                text_color = 'darkgreen'
+            else:
+                # Different from device - yellow
+                color = '#FFFF99'  # Light yellow
+                text_color = 'darkorange'
+        else:
+            # Device pref doesn't exist for this key - no special coloring (white)
+            color = 'white'
+            text_color = 'black'
+        
+        # Update row background and text colors
+        row_widget.config(bg=color)
+        for child in row_widget.winfo_children():
+            if isinstance(child, tk.Label):
+                child.config(bg=color, fg=text_color)
+            elif isinstance(child, tk.Entry):
+                child.config(bg=color, fg=text_color)
+            elif isinstance(child, tk.Checkbutton):
+                child.config(bg=color, activebackground=color)
+
+    def get_alternate_keys(self, config_key: str) -> list:
+        """Get alternative key formats to try for known mapping issues
+        
+        Some fields have naming inconsistencies between config and device prefs.
+        This provides alternative key formats to check.
+        """
+        alternates = []
+        
+        # Known problematic mappings
+        mapping_fixes = {
+            'neighbor_info.update_interval': ['neighborInfo.updateInterval'],
+            'position.fixed_position': ['position.fixedPosition'],
+            'wifi_enabled': ['wifiEnabled'],
+        }
+        
+        if config_key in mapping_fixes:
+            alternates.extend(mapping_fixes[config_key])
+        
+        return alternates
+
+    def debug_config_key_mapping(self, config_key: str):
+        """Debug helper: show what device keys are available and what conversion produces"""
+        # Build flattened device prefs
+        all_device_prefs = {}
+        all_device_prefs.update(self.original_prefs)
+        all_device_prefs.update(self.original_module_prefs)
+        
+        flattened_device = {}
+        for section_key, section_val in all_device_prefs.items():
+            if isinstance(section_val, dict):
+                for sub_key, sub_val in section_val.items():
+                    full_key = f"{section_key}.{sub_key}"
+                    flattened_device[full_key] = sub_val
+            else:
+                flattened_device[section_key] = section_val
+        
+        converted = self.convert_config_key_to_device(config_key)
+        found = converted in flattened_device
+        
+        print(f"\n=== DEBUG: {config_key} ===")
+        print(f"Converted to: {converted}")
+        print(f"Found: {found}")
+        if found:
+            print(f"Value: {flattened_device[converted]}")
+        print(f"Available keys containing '{config_key.split('.')[0]}':")
+        for key in sorted(flattened_device.keys()):
+            if config_key.split('.')[0].replace('_', '') in key.replace('Info', '').lower():
+                print(f"  {key}: {flattened_device[key]}")
+        print()
+
+
+    def convert_config_key_to_device(self, config_key: str) -> str:
+        """Convert config key format (with underscores) to device format (camelCase)
+        
+        Examples:
+            bluetooth.fixed_pin -> bluetooth.fixedPin
+            neighbor_info.enabled -> neighborInfo.enabled
+            lora.channel_num -> lora.channelNum
+        """
+        parts = config_key.split('.')
+        converted_parts = []
+        
+        for part in parts:
+            # Convert snake_case to camelCase
+            # e.g., "fixed_pin" -> "fixedPin", "neighbor_info" -> "neighborInfo"
+            if '_' in part:
+                words = part.split('_')
+                converted = words[0] + ''.join(word.capitalize() for word in words[1:])
+                converted_parts.append(converted)
+            else:
+                converted_parts.append(part)
+        
+        return '.'.join(converted_parts)
+
+    def parse_config_value(self, value_str: str, device_value):
+        """Parse a config string value to match the type of the device value
+        
+        Args:
+            value_str: The string value from the config entry
+            device_value: The actual device value to match type against
+            
+        Returns:
+            The parsed value in the same type as device_value
+        """
+        if isinstance(device_value, bool):
+            # Handle boolean: "True", "true", "1", "yes" -> True, others -> False
+            return value_str.lower() in ('true', '1', 'yes', 'enabled')
+        elif isinstance(device_value, int):
+            # Handle integer
+            try:
+                return int(value_str)
+            except (ValueError, TypeError):
+                return None
+        elif isinstance(device_value, float):
+            # Handle float
+            try:
+                return float(value_str)
+            except (ValueError, TypeError):
+                return None
+        elif isinstance(device_value, list):
+            # Handle list - try to parse as JSON or comma-separated
+            try:
+                return json.loads(value_str)
+            except (ValueError, json.JSONDecodeError):
+                # Try comma-separated
+                return [v.strip() for v in value_str.split(',')]
+        else:
+            # Default: string comparison
+            return value_str
+
+    def refresh_config_colors(self):
+        """Refresh color highlighting for all config rows based on current device preferences"""
+        for key, (_, value_var, _) in self.config_rows.items():
+            current_value = value_var.get()
+            # Find the row widget for this key by searching the config_frame children
+            # The rows are packed in order, so we need to match them
+            for child in self.config_frame.winfo_children():
+                if isinstance(child, tk.Frame):
+                    # Check if this is the row for this key (by checking label text)
+                    for label in child.winfo_children():
+                        if isinstance(label, tk.Label) and label.cget('text') == key:
+                            # Found the row, update its color
+                            self.update_config_pref_color(key, current_value, child)
+                            break
 
     def select_all_configs(self):
         """Check all config checkboxes"""
@@ -316,14 +576,25 @@ class ConfiguratorGUI(tk.Tk):
             check_var.set(False)
 
     def render_prefs_editor(self):
-        """Render preferences rows from original_prefs, grouped by section"""
+        """Render regular preferences on left, modules and channels on right"""
+        # Clear left side (regular preferences)
         for widget in self.prefs_frame.winfo_children():
             widget.destroy()
         self.prefs_rows = {}
 
-        # Group by section
+        # Render version at top if present
+        if 'version' in self.original_prefs:
+            version_frame = ttk.Frame(self.prefs_frame)
+            version_frame.pack(fill=tk.X, padx=4, pady=(4, 2))
+            ttk.Label(version_frame, text=f"version: {self.original_prefs['version']}", font=('TkFixedFont', 8)).pack(anchor='w')
+            separator = ttk.Frame(self.prefs_frame, height=1)
+            separator.pack(fill=tk.X, padx=4, pady=4)
+
+        # Render regular preferences on left
         sections = {}
         for key, val in self.original_prefs.items():
+            if key == 'version':  # Skip version, already rendered at top
+                continue
             if isinstance(val, dict):
                 sections[key] = val
             else:
@@ -347,15 +618,84 @@ class ConfiguratorGUI(tk.Tk):
                 for subkey, subval in sorted(section_data.items()):
                     full_key = f"{section_name}.{subkey}"
                     self.add_pref_row(full_key, subval)
+        
+        # Clear right side (module preferences and channels)
+        for widget in self.module_frame.winfo_children():
+            widget.destroy()
+        self.module_prefs_rows = {}
+        
+        # Render version at top if present
+        if 'version' in self.original_module_prefs:
+            version_frame = ttk.Frame(self.module_frame)
+            version_frame.pack(fill=tk.X, padx=4, pady=(4, 2))
+            ttk.Label(version_frame, text=f"version: {self.original_module_prefs['version']}", font=('TkFixedFont', 8)).pack(anchor='w')
+            separator = ttk.Frame(self.module_frame, height=1)
+            separator.pack(fill=tk.X, padx=4, pady=4)
+        
+        # Render module preferences on right
+        module_sections = {}
+        for key, val in self.original_module_prefs.items():
+            if key == 'version':  # Skip version, already rendered at top
+                continue
+            if isinstance(val, dict):
+                module_sections[key] = val
+            else:
+                if '__other__' not in module_sections:
+                    module_sections['__other__'] = {}
+                module_sections[key] = val
+        
+        # Render each module section with header and rows
+        for section_name in sorted(module_sections.keys()):
+            if section_name == '__other__':
+                continue
+            section_data = module_sections[section_name]
+            
+            # Section header (with "MODULE:" prefix)
+            header = ttk.Frame(self.module_frame)
+            header.pack(fill=tk.X, padx=4, pady=(8, 2))
+            ttk.Label(header, text=f"MODULE: {section_name.upper()}", font=('TkDefaultFont', 10, 'bold')).pack(anchor='w')
+            
+            # Render items in this section
+            if isinstance(section_data, dict):
+                for subkey, subval in sorted(section_data.items()):
+                    full_key = f"{section_name}.{subkey}"
+                    self.add_module_pref_row(full_key, subval)
+        
+        # Render channels on right
+        if self.original_channels:
+            header = ttk.Frame(self.module_frame)
+            header.pack(fill=tk.X, padx=4, pady=(12, 2))
+            ttk.Label(header, text="CHANNELS", font=('TkDefaultFont', 10, 'bold')).pack(anchor='w')
+            
+            # Display each channel
+            if isinstance(self.original_channels, list):
+                for channel in self.original_channels:
+                    idx = channel.get('index', '?')
+                    data = channel.get('data', {})
+                    
+                    # Channel header with index and name
+                    name = data.get('name', 'N/A')
+                    ch_header = ttk.Frame(self.module_frame)
+                    ch_header.pack(fill=tk.X, padx=20, pady=(4, 2))
+                    ttk.Label(ch_header, text=f"Channel {idx}: {name}", font=('TkDefaultFont', 9, 'bold')).pack(anchor='w')
+                    
+                    # Channel details (psk, id, etc.)
+                    for key, val in sorted(data.items()):
+                        if key != 'moduleSettings':  # Skip nested objects
+                            row = ttk.Frame(self.module_frame)
+                            row.pack(fill=tk.X, padx=40, pady=1)
+                            ttk.Label(row, text=f"{key}: {val}", font=('TkFixedFont', 8)).pack(anchor='w')
+        
+        # Recalculate config row colors now that preferences are updated
+        self.refresh_config_colors()
 
     def add_pref_row(self, key: str, orig_value):
         """Add a single preference row (no checkbox)"""
         row = ttk.Frame(self.prefs_frame)
         row.pack(fill=tk.X, padx=20, pady=2)
 
-        # Key label (extract just the subkey part)
-        subkey = key.split('.')[-1] if '.' in key else key
-        key_label = tk.Label(row, text=subkey, width=30, anchor='w', justify=tk.LEFT)
+        # Key label - show full dot notation key
+        key_label = tk.Label(row, text=key, width=30, anchor='w', justify=tk.LEFT)
         key_label.pack(side=tk.LEFT, padx=2)
 
         # Value entry
@@ -383,6 +723,41 @@ class ConfiguratorGUI(tk.Tk):
             value_var.trace('w', on_value_change)
 
         self.prefs_rows[key] = (value_var, asterisk_label)
+
+    def add_module_pref_row(self, key: str, orig_value):
+        """Add a single module preference row to the right column"""
+        row = ttk.Frame(self.module_frame)
+        row.pack(fill=tk.X, padx=20, pady=2)
+
+        # Key label - show full dot notation key
+        key_label = tk.Label(row, text=key, width=30, anchor='w', justify=tk.LEFT)
+        key_label.pack(side=tk.LEFT, padx=2)
+
+        # Value entry
+        value_var = tk.StringVar(value=str(orig_value))
+        entry = ttk.Entry(row, textvariable=value_var, width=50)
+        entry.pack(side=tk.LEFT, padx=2)
+
+        # Asterisk label
+        asterisk_label = tk.Label(row, text=" ", width=3, anchor='w', foreground='red', font=('TkDefaultFont', 10, 'bold'))
+        asterisk_label.pack(side=tk.LEFT, padx=2)
+
+        # Bind value changes
+        def on_value_change(*args, k=key, ov=orig_value, al=asterisk_label, kl=key_label, vv=value_var):
+            current = vv.get()
+            if str(ov) != current:
+                al.config(text="*", foreground='red')
+                kl.config(font=('TkDefaultFont', 10, 'bold'))
+            else:
+                al.config(text=" ")
+                kl.config(font=('TkDefaultFont', 10))
+
+        try:
+            value_var.trace_add('write', on_value_change)
+        except Exception:
+            value_var.trace('w', on_value_change)
+
+        self.module_prefs_rows[key] = (value_var, asterisk_label)
 
     def format_info_display(self, info_dict):
         """Format info dict as human-readable text"""
@@ -550,9 +925,99 @@ class ConfiguratorGUI(tk.Tk):
                         self.original_prefs = {}
                 except Exception:
                     self.original_prefs = {}
+                
+                # Also extract Module preferences if present
+                module_prefs_start_idx = None
+                for idx, l in enumerate(body):
+                    if l.strip().startswith('Module preferences:'):
+                        module_prefs_start_idx = idx
+                        break
+                
+                if module_prefs_start_idx is not None:
+                    # Extract Module preferences JSON block
+                    module_start_line = body[module_prefs_start_idx]
+                    if module_start_line.startswith('Module preferences:'):
+                        module_start_line = module_start_line[len('Module preferences:'):].lstrip()
+                    
+                    module_json_lines = []
+                    brace_count = 0
+                    started = False
+                    for i in range(module_prefs_start_idx, len(body)):
+                        line = body[i]
+                        
+                        if not started:
+                            module_json_lines.append(module_start_line)
+                            brace_count += module_start_line.count('{') - module_start_line.count('}')
+                            started = True
+                            if brace_count == 0:
+                                break
+                            continue
+                        
+                        if line.strip().startswith('Channels:'):
+                            break
+                        
+                        module_json_lines.append(line)
+                        brace_count += line.count('{') - line.count('}')
+                        if brace_count == 0:
+                            break
+                    
+                    module_prefs_text = '\n'.join(module_json_lines)
+                    try:
+                        module_parsed = json.loads(module_prefs_text)
+                        if isinstance(module_parsed, dict):
+                            # Keep module prefs separate
+                            self.original_module_prefs = module_parsed
+                    except Exception:
+                        self.original_module_prefs = {}
+                else:
+                    self.original_module_prefs = {}
             else:
                 info_body = body
                 self.original_prefs = {}
+                self.original_module_prefs = {}
+            
+            # Extract Channels section if present
+            channels_start_idx = None
+            for idx, line in enumerate(body):
+                if line.strip().startswith('Channels:'):
+                    channels_start_idx = idx
+                    break
+            
+            if channels_start_idx is not None:
+                # Parse channels - format is "Index N: TYPE psk=secret { JSON }"
+                channels_list = []
+                for i in range(channels_start_idx + 1, len(body)):
+                    line = body[i].strip()
+                    # Stop at next major section
+                    if line.startswith(('Primary channel URL:', 'Complete URL:', '')):
+                        if not line:
+                            continue
+                        if line.startswith(('Primary channel URL:', 'Complete URL:')):
+                            break
+                    
+                    if line and 'Index' in line:
+                        # Extract index number and JSON
+                        # Format: "Index 0: PRIMARY psk=secret { ... }"
+                        try:
+                            # Find the JSON part (starts with {)
+                            json_start = line.find('{')
+                            if json_start > -1:
+                                json_str = line[json_start:]
+                                parsed_json = json.loads(json_str)
+                                # Extract Index number
+                                index_match = re.search(r'Index\s+(\d+)', line)
+                                if index_match:
+                                    index_num = index_match.group(1)
+                                    channels_list.append({
+                                        'index': index_num,
+                                        'data': parsed_json
+                                    })
+                        except Exception:
+                            pass
+                
+                self.original_channels = channels_list if channels_list else {}
+            else:
+                self.original_channels = {}
             # Now process info_body: filter "Nodes in mesh:" to show only first node
             # Find the start of the Nodes in mesh section
             start_idx = None
