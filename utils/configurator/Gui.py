@@ -26,8 +26,8 @@ class ConfiguratorGUI(tk.Tk):
         self.loaded_config_text = ""
         self.original_config = {}  # {key: value} from file
         self.original_config_channels = []  # Channels from config file
-        self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label)}
-        self.channel_rows = {}  # {index: {field: (checkbox_var, value_var, asterisk_label)}}
+        self.config_rows = {}  # {key: (checkbox_var, value_var, asterisk_label, row_widget)}
+        self.channel_rows = {}  # {index: {field: (checkbox_var, value_var, asterisk_label, row_widget)}}
 
         # Top frame for names and dropdown
         top = ttk.Frame(self)
@@ -142,6 +142,7 @@ class ConfiguratorGUI(tk.Tk):
         ttk.Button(cfg_btns, text="Add Config Key", command=self.add_config_key).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Add Channel", command=self.add_channel).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Select All", command=self.select_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(cfg_btns, text="Select Changed", command=self.select_changed_configs).pack(side=tk.LEFT, padx=4, pady=4)
         ttk.Button(cfg_btns, text="Deselect All", command=self.deselect_all_configs).pack(side=tk.LEFT, padx=4, pady=4)
 
         # Bottom controls: toggles and actions
@@ -150,7 +151,7 @@ class ConfiguratorGUI(tk.Tk):
 
         # Toggles
         self.test_var = tk.BooleanVar(value=False)
-        self.set_var = tk.BooleanVar(value=False)
+        self.set_var = tk.BooleanVar(value=True)
         self.retain_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(bottom, text="Test (echo only)", variable=self.test_var).pack(side=tk.LEFT, padx=6)
         ttk.Checkbutton(bottom, text="Perform writes (set)", variable=self.set_var).pack(side=tk.LEFT, padx=6)
@@ -363,7 +364,7 @@ class ConfiguratorGUI(tk.Tk):
             # fallback
             value_var.trace('w', on_value_change)
 
-        self.config_rows[key] = (check_var, value_var, asterisk_label)
+        self.config_rows[key] = (check_var, value_var, asterisk_label, row)
         
         # Initial color check
         self.update_config_pref_color(key, str(orig_value), row)
@@ -411,8 +412,8 @@ class ConfiguratorGUI(tk.Tk):
                     break
             
             # If still not found, print debug info
-            if device_value is None:
-                self.debug_config_key_mapping(key)
+            # if device_value is None:
+            #     self.debug_config_key_mapping(key)
         
         if device_value is not None:
             # Parse the config value to match the type of device value
@@ -420,7 +421,7 @@ class ConfiguratorGUI(tk.Tk):
             
             # Compare values
             matches = parsed_config_value == device_value
-            print(f"COMPARE: {key} | parsed={repr(parsed_config_value)} ({type(parsed_config_value).__name__}) == device={repr(device_value)} ({type(device_value).__name__}) => {matches}")
+            # print(f"COMPARE: {key} | parsed={repr(parsed_config_value)} ({type(parsed_config_value).__name__}) == device={repr(device_value)} ({type(device_value).__name__}) => {matches}")
             
             if matches:
                 # Same as device - green
@@ -612,7 +613,7 @@ class ConfiguratorGUI(tk.Tk):
         except Exception:
             value_var.trace('w', on_value_change)
 
-        self.channel_rows[channel_idx][field_key] = (check_var, value_var, asterisk_label)
+        self.channel_rows[channel_idx][field_key] = (check_var, value_var, asterisk_label, row)
         
         # Initial color check
         self.update_channel_color(channel_idx, field_key, str(orig_value), row)
@@ -620,29 +621,29 @@ class ConfiguratorGUI(tk.Tk):
     def update_channel_color(self, channel_idx, field_key: str, current_value: str, row_widget):
         """Check if channel field differs from device channel and update row background color"""
         
-        print(f"\n=== CHANNEL DEBUG: idx={channel_idx}, field={field_key} ===")
-        print(f"Config value: {repr(current_value)}")
-        print(f"self.original_channels type: {type(self.original_channels)}")
-        print(f"self.original_channels: {self.original_channels}")
+        # print(f"\n=== CHANNEL DEBUG: idx={channel_idx}, field={field_key} ===")
+        # print(f"Config value: {repr(current_value)}")
+        # print(f"self.original_channels type: {type(self.original_channels)}")
+        # print(f"self.original_channels: {self.original_channels}")
         
         # Find the matching device channel by index
         device_channel = None
         if isinstance(self.original_channels, list):
             for ch in self.original_channels:
-                print(f"  Checking channel: {ch}")
+                # print(f"  Checking channel: {ch}")
                 if isinstance(ch, dict):
                     ch_data = ch.get('data', {})
                     ch_index = ch.get('index', '')
-                    print(f"    Channel index: {repr(ch_index)}, comparing to config index {repr(channel_idx)}")
+                    # print(f"    Channel index: {repr(ch_index)}, comparing to config index {repr(channel_idx)}")
                     # Match device channel by its index field
                     if str(ch_index) == str(channel_idx):
                         device_channel = ch_data
-                        print(f"    MATCH! Device channel data: {ch_data}")
+                        # print(f"    MATCH! Device channel data: {ch_data}")
                         break
         
-        print(f"Device channel found: {device_channel is not None}")
-        if device_channel:
-            print(f"Device channel data: {device_channel}")
+            # print(f"Device channel found: {device_channel is not None}")
+        # if device_channel:
+            # print(f"Device channel data: {device_channel}")
         
         # Map config field names to device field names
         field_mapping = {
@@ -652,11 +653,11 @@ class ConfiguratorGUI(tk.Tk):
         }
         
         device_field = field_mapping.get(field_key, field_key)
-        print(f"Field mapping: '{field_key}' -> '{device_field}'")
+        # print(f"Field mapping: '{field_key}' -> '{device_field}'")
         
         if device_channel is not None and device_field in device_channel:
             device_value = device_channel[device_field]
-            print(f"Device field '{device_field}': {repr(device_value)}")
+            # print(f"Device field '{device_field}': {repr(device_value)}")
             
             # Handle psk with base64 prefix (like admin_key)
             compare_value = current_value
@@ -666,11 +667,11 @@ class ConfiguratorGUI(tk.Tk):
                 # Strip base64: prefix from config value for comparison
                 if isinstance(compare_value, str) and compare_value.startswith('base64:'):
                     compare_value = compare_value[7:]
-                    print(f"Stripped config psk to: {repr(compare_value)}")
+                    # print(f"Stripped config psk to: {repr(compare_value)}")
             
             # Compare values
             matches = str(compare_value) == str(compare_device)
-            print(f"Comparison: {repr(compare_value)} == {repr(compare_device)} => {matches}")
+            # print(f"Comparison: {repr(compare_value)} == {repr(compare_device)} => {matches}")
             
             if matches:
                 # Same as device - green
@@ -682,11 +683,11 @@ class ConfiguratorGUI(tk.Tk):
                 text_color = 'darkorange'
         else:
             # Device channel doesn't exist for this index/field - white
-            print(f"Device field '{device_field}' not found in device channel")
+            # print(f"Device field '{device_field}' not found in device channel")
             color = 'white'
             text_color = 'black'
         
-        print(f"Setting color: {color}\n")
+        # print(f"Setting color: {color}\n")
         
         # Update row background and text colors
         row_widget.config(bg=color)
@@ -700,44 +701,103 @@ class ConfiguratorGUI(tk.Tk):
 
     def refresh_config_colors(self):
         """Refresh color highlighting for all config rows based on current device preferences"""
-        for key, (_, value_var, _) in self.config_rows.items():
+        for key, (_, value_var, _, row) in self.config_rows.items():
             current_value = value_var.get()
-            # Find the row widget for this key by searching the config_frame children
-            # The rows are packed in order, so we need to match them
-            for child in self.config_frame.winfo_children():
-                if isinstance(child, tk.Frame):
-                    # Check if this is the row for this key (by checking label text)
-                    for label in child.winfo_children():
-                        if isinstance(label, tk.Label) and label.cget('text') == key:
-                            # Found the row, update its color
-                            self.update_config_pref_color(key, current_value, child)
-                            break
+            self.update_config_pref_color(key, current_value, row)
 
     def refresh_channel_colors(self):
         """Refresh color highlighting for all channel rows based on current device channels"""
         for channel_idx, fields in self.channel_rows.items():
-            for field_key, (_, value_var, _) in fields.items():
+            for field_key, (_, value_var, _, row) in fields.items():
                 current_value = value_var.get()
-                # Find the row widget by searching children
-                for child in self.config_frame.winfo_children():
-                    if isinstance(child, tk.Frame):
-                        # Check if this is a channel row by checking label text
-                        for label in child.winfo_children():
-                            if isinstance(label, tk.Label) and label.cget('text') == field_key:
-                                # Check if this belongs to the right channel by checking parent structure
-                                # This is a bit crude but should work for now
-                                self.update_channel_color(channel_idx, field_key, current_value, child)
-                                break
+                self.update_channel_color(channel_idx, field_key, current_value, row)
 
     def select_all_configs(self):
         """Check all config checkboxes"""
-        for key, (check_var, _, _) in self.config_rows.items():
+        for key, (check_var, _, _, _) in self.config_rows.items():
             check_var.set(True)
+        for _, fields in self.channel_rows.items():
+            for check_var, _, _, _ in fields.values():
+                check_var.set(True)
+
+    def select_changed_configs(self):
+        """Check only config and channel rows that differ from the node"""
+        for key, (check_var, _, _, row) in self.config_rows.items():
+            check_var.set(row.cget('bg') == '#FFFF99')
+
+        for idx, fields in self.channel_rows.items():
+            for field_key, (check_var, _, _, row) in fields.items():
+                check_var.set(row.cget('bg') == '#FFFF99')
+
+    def compare_config_to_device(self, key: str, current_value: str):
+        """Return True if config value matches device preference, False if different, None if not found"""
+        all_device_prefs = {}
+        all_device_prefs.update(self.original_prefs)
+        all_device_prefs.update(self.original_module_prefs)
+
+        flattened_device = {}
+        for section_key, section_val in all_device_prefs.items():
+            if isinstance(section_val, dict):
+                for sub_key, sub_val in section_val.items():
+                    full_key = f"{section_key}.{sub_key}"
+                    flattened_device[full_key] = sub_val
+            else:
+                flattened_device[section_key] = section_val
+
+        device_key = self.convert_config_key_to_device(key)
+        device_value = flattened_device.get(device_key) or flattened_device.get(key)
+
+        if device_value is None:
+            alt_mappings = self.get_alternate_keys(key)
+            for alt_key in alt_mappings:
+                if alt_key in flattened_device:
+                    device_value = flattened_device[alt_key]
+                    break
+
+        if device_value is None:
+            return None
+
+        parsed_config_value = self.parse_config_value(current_value, device_value)
+        return parsed_config_value == device_value
+
+    def compare_channel_to_device(self, channel_idx, field_key: str, current_value: str):
+        """Return True if channel field matches device, False if different, None if not found"""
+        device_channel = None
+        if isinstance(self.original_channels, list):
+            for ch in self.original_channels:
+                if isinstance(ch, dict):
+                    ch_data = ch.get('data', {})
+                    ch_index = ch.get('index', '')
+                    if str(ch_index) == str(channel_idx):
+                        device_channel = ch_data
+                        break
+
+        if device_channel is None:
+            return None
+
+        field_mapping = {
+            'index': 'channelNum',
+            'name': 'name',
+            'psk': 'psk'
+        }
+        device_field = field_mapping.get(field_key, field_key)
+        if device_field not in device_channel:
+            return None
+
+        device_value = device_channel[device_field]
+        compare_value = current_value
+        if field_key == 'psk' and isinstance(compare_value, str) and compare_value.startswith('base64:'):
+            compare_value = compare_value[7:]
+
+        return str(compare_value) == str(device_value)
 
     def deselect_all_configs(self):
         """Uncheck all config checkboxes"""
-        for key, (check_var, _, _) in self.config_rows.items():
+        for key, (check_var, _, _, _) in self.config_rows.items():
             check_var.set(False)
+        for _, fields in self.channel_rows.items():
+            for check_var, _, _, _ in fields.values():
+                check_var.set(False)
 
     def add_config_key(self):
         """Add a new config key/value pair"""
@@ -1338,7 +1398,7 @@ class ConfiguratorGUI(tk.Tk):
 
     def revert_changes(self):
         """Revert all changes to original values"""
-        for key, (_, value_var, _) in self.config_rows.items():
+        for key, (_, value_var, _, _) in self.config_rows.items():
             orig_val = self.original_config.get(key, '')
             value_var.set(str(orig_val))
 
@@ -1346,7 +1406,7 @@ class ConfiguratorGUI(tk.Tk):
         """Save current config to YAML file"""
         # Build YAML from current rows
         config_data = {'settings': {}}
-        for key, (_, value_var, _) in self.config_rows.items():
+        for key, (_, value_var, _, _) in self.config_rows.items():
             val_str = value_var.get().strip()
             # Try to parse as JSON, int, bool, or keep as string
             try:
@@ -1366,7 +1426,7 @@ class ConfiguratorGUI(tk.Tk):
             channels_list = []
             for idx in sorted(self.channel_rows.keys()):
                 channel_data = {}
-                for field, (_, value_var, _) in self.channel_rows[idx].items():
+                for field, (_, value_var, _, _) in self.channel_rows[idx].items():
                     val_str = value_var.get().strip()
                     # Try to convert index to int
                     if field == 'index':
@@ -1408,7 +1468,7 @@ class ConfiguratorGUI(tk.Tk):
     def write_to_node(self):
         # Build config from checked rows only
         config_opts = {}
-        for key, (check_var, value_var, _) in self.config_rows.items():
+        for key, (check_var, value_var, _, _) in self.config_rows.items():
             if check_var.get():  # only include checked items
                 val_str = value_var.get().strip()
                 # Try to parse as JSON, int, bool, or keep as string
@@ -1424,14 +1484,17 @@ class ConfiguratorGUI(tk.Tk):
                 except Exception:
                     config_opts[key] = val_str
 
+            had_error = False
         channels = self.original_config.get('__channels__', [])
 
         # apply top name overrides
         ln = self.longname_var.get().strip()
         sn = self.shortname_var.get().strip()
-        if ln:
+        orig_ln = str(self.original_config.get('user.longname', '')).strip()
+        orig_sn = str(self.original_config.get('user.shortname', '')).strip()
+        if ln and ln != orig_ln:
             config_opts['user.longname'] = ln
-        if sn:
+        if sn and sn != orig_sn:
             config_opts['user.shortname'] = sn
 
         # Build getcmd to read current settings
@@ -1481,15 +1544,45 @@ class ConfiguratorGUI(tk.Tk):
                         continue
                     else:
                         setcmd += f" --set {key} {value}"
-                runCmd(setcmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                set_out = runCmd(setcmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                if set_out and ('Aborting' in set_out or 'Error' in set_out):
+                    had_error = True
 
                 # Handle admin keys
                 if new_settings.get('security.admin_key') is not None:
                     admin_vals = new_settings['security.admin_key']
+                    print(f"DEBUG admin_key: type={type(admin_vals)}, value={repr(admin_vals)}")
+
+                    def normalize_admin_vals(raw_vals):
+                        if isinstance(raw_vals, list) and raw_vals and all(isinstance(x, str) and len(x) == 1 for x in raw_vals):
+                            raw_vals = ''.join(raw_vals)
+                        if isinstance(raw_vals, str):
+                            raw_vals = raw_vals.strip()
+                            try:
+                                raw_vals = json.loads(raw_vals)
+                                print(f"  Parsed with json.loads: {repr(raw_vals)}")
+                            except (ValueError, json.JSONDecodeError):
+                                try:
+                                    raw_vals = ast.literal_eval(raw_vals)
+                                    print(f"  Parsed with ast.literal_eval: {repr(raw_vals)}")
+                                except (ValueError, SyntaxError):
+                                    raw_vals = [raw_vals]
+                                    print(f"  Failed to parse, wrapped in list: {repr(raw_vals)}")
+                        if not isinstance(raw_vals, list):
+                            raw_vals = [raw_vals]
+                        return raw_vals
+
+                    admin_vals = normalize_admin_vals(admin_vals)
+                    print(f"  Final admin_vals: {repr(admin_vals)}")
+
                     admin_cmd = "meshtastic"
                     for v in admin_vals:
+                        print(f"  Adding admin_key value: {repr(v)}")
                         admin_cmd += f" --set security.admin_key {v}"
-                    runCmd(admin_cmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                    print(f"  Final command: {admin_cmd}")
+                    admin_out = runCmd(admin_cmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                    if admin_out and ('Aborting' in admin_out or 'Error' in admin_out):
+                        had_error = True
 
         # Channels
         if channels:
@@ -1497,7 +1590,9 @@ class ConfiguratorGUI(tk.Tk):
                 if self.set_var.get():
                     for cdict in channels:
                         cmd = f"meshtastic --ch-set name {cdict['name']} --ch-set psk {cdict['psk']} --ch-index {cdict['index']}"
-                        runCmd(cmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                        ch_out = runCmd(cmd, echoOnly=self.test_var.get(), reboot=(not self.test_var.get()))
+                        if ch_out and ('Aborting' in ch_out or 'Error' in ch_out):
+                            had_error = True
                 else:
                     messagebox.showinfo("Channels", "Channels differ but not applying (set disabled).")
 
@@ -1509,7 +1604,10 @@ class ConfiguratorGUI(tk.Tk):
             if keys:
                 writeKeysToFile(keys['nodeId'], keys['private_key'], keys['public_key'], self.current_config_path or '')
 
-        messagebox.showinfo("Done", "Write operation finished.")
+        if had_error:
+            messagebox.showerror("Write failed", "One or more commands failed. Check the console output for details.")
+        else:
+            messagebox.showinfo("Done", "Write operation finished.")
 
 
 def main():
